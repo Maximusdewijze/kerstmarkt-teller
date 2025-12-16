@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  web:
+    image: nginx:alpine
+    container_name: kerst_teller
+    ports:
+      - "8009:8009"
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html
