@@ -3,31 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <title>VierVoorSpier — Kerstmarkt teller</title>
-
-  <!-- Tailwind CSS v4 CDN -->
   <script src="https://cdn.tailwindcss.com?plugins=forms,typography,aspect-ratio"></script>
-
-  <!-- Fonts -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800&display=swap" rel="stylesheet" />
-
   <style>
-    body {
-      margin: 0;
-      font-family: 'Inter', sans-serif;
-      background: url("https://media.deyvo.nl/media/kerst-achtergrond-ZcXHlHPo") no-repeat center center fixed;
-      background-size: cover;
-      overflow: hidden;
-    }
-
-    @keyframes fadeout {
-      0% { opacity: 1; transform: translateY(0); }
-      100% { opacity: 0; transform: translateY(-20px); }
-    }
-
-    @keyframes twinkle {
-      from { opacity: 0.2; }
-      to   { opacity: 1; }
-    }
+    body{margin:0;font-family:'Inter',sans-serif;background:url("https://media.deyvo.nl/media/kerst-achtergrond-ZcXHlHPo") no-repeat center center fixed;background-size:cover;overflow:hidden}
+    @keyframes fadeout{0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-20px)}}
+    @keyframes twinkle{from{opacity:.2}to{opacity:1}}
   </style>
 </head>
 <body class="relative text-center text-black">
@@ -36,7 +17,6 @@
     Serious Request — ’s-Hertogenbosch
   </header>
 
-  <!-- Snow canvas -->
   <canvas id="snow" class="fixed inset-0 z-10 pointer-events-none"></canvas>
 
   <div class="wrap relative z-20 flex flex-col items-center justify-center min-h-screen">
@@ -47,13 +27,11 @@
 
   <div id="deltas" class="fixed top-[140px] left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5 z-40"></div>
 
-  <!-- Donation QR (left) -->
   <div class="corner left fixed bottom-5 left-5 bg-black/50 p-3 rounded-xl flex flex-col items-center gap-1.5 z-20">
     <img src="https://media.deyvo.nl/media/donatie-UW4uVze6" alt="Doneer QR" class="w-[120px] h-[120px] rounded-lg bg-white" />
     <div class="text-white text-sm">Doneer</div>
   </div>
 
-  <!-- Instagram QR (right) -->
   <div class="corner right fixed bottom-5 right-5 bg-black/50 p-3 rounded-xl flex flex-col items-center gap-1.5 z-20">
     <img src="https://media.deyvo.nl/media/instagram-ru8qqMu3" alt="Instagram QR" class="w-[120px] h-[120px] rounded-lg bg-white" />
     <div class="text-white text-sm">Instagram</div>
@@ -69,91 +47,169 @@
   </div>
 
   <script>
+    const CONFETTI_COLORS=['#22c55e','#ef4444','#eab308','#3b82f6','#ec4899','#a855f7','#14b8a6'];
+    const MILESTONE_SOUNDS = {
+      100:  "/sounds/myinstants.mp3",
+      300:  "/sounds/myinstants.mp3",
+      500:  "/sounds/myinstants.mp3",
+      1000: "/sounds/myinstants.mp3"
+    };
 
+    const SOUND_VOLUME=0.7;
 
-    const CONFETTI_COLORS = ['#22c55e', '#ef4444', '#eab308', '#3b82f6', '#ec4899', '#a855f7', '#14b8a6'];
+    function rand(min,max){return Math.random()*(max-min)+min}
+    function clamp(v,min,max){return Math.max(min,Math.min(max,v))}
 
-    function rand(min, max) { return Math.random() * (max - min) + min; }
-    function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+    const resolvedSoundUrl=new Map();
+    const audioPool=new Map();
 
-    // burstLevel: 1 = €100, 2 = €200, 5 = €500, 10 = €1000, etc.
-    // kan je aanpassen als je eventueel meer confetti wilt
-    function launchConfetti(burstLevel = 1) {
-      const count = Math.round(90 + 60 * Math.sqrt(burstLevel));
+    function normalizeCandidates(url){
+      const base=url.split('?')[0].split('#')[0];
+      const hasExt=/\.(mp3|wav|ogg|m4a|aac)$/i.test(base);
+      if(hasExt) return [url];
+      return [url,url+".mp3",url+".wav",url+".ogg",url+".m4a"];
+    }
 
-      const spawnCenterX = window.innerWidth * 0.5;
-      const spawnSpread  = window.innerWidth * 0.55;
+    function probePlayable(url,timeoutMs=1200){
+      return new Promise((resolve,reject)=>{
+        const a=new Audio();
+        let done=false;
+        const cleanup=()=>{
+          a.oncanplaythrough=null;
+          a.onerror=null;
+          a.onloadeddata=null;
+          try{a.src="";a.load()}catch{}
+        };
+        const ok=()=>{
+          if(done) return;
+          done=true;
+          cleanup();
+          resolve(url);
+        };
+        const bad=()=>{
+          if(done) return;
+          done=true;
+          cleanup();
+          reject(new Error("not playable"));
+        };
+        const timer=setTimeout(()=>{if(!done){done=true;cleanup();reject(new Error("timeout"))}},timeoutMs);
+        const okWrap=()=>{clearTimeout(timer);ok()};
+        const badWrap=()=>{clearTimeout(timer);bad()};
+        a.preload="auto";
+        a.oncanplaythrough=okWrap;
+        a.onloadeddata=okWrap;
+        a.onerror=badWrap;
+        a.src=url;
+        try{a.load()}catch{clearTimeout(timer);bad()}
+      });
+    }
 
-      for (let i = 0; i < count; i++) {
-        const el = document.createElement('div');
+    async function resolveUrl(url){
+      if(resolvedSoundUrl.has(url)) return resolvedSoundUrl.get(url);
+      const candidates=normalizeCandidates(url);
+      for(const c of candidates){
+        try{
+          const ok=await probePlayable(c);
+          resolvedSoundUrl.set(url,ok);
+          return ok;
+        }catch{}
+      }
+      resolvedSoundUrl.set(url,candidates[0]);
+      return candidates[0];
+    }
 
-        const isRect = Math.random() < 0.7;
-        const w = isRect ? rand(6, 10) : rand(6, 9);
-        const h = isRect ? rand(10, 16) : w;
+    async function playSound(url){
+      if(!url) return;
+      const finalUrl=await resolveUrl(url);
+      let a=audioPool.get(finalUrl);
+      if(!a){
+        a=new Audio(finalUrl);
+        a.preload="auto";
+        a.crossOrigin="anonymous";
+        audioPool.set(finalUrl,a);
+      }else{
+        if(a.src!==finalUrl) a.src=finalUrl;
+      }
+      try{
+        a.pause();
+        a.currentTime=0;
+        a.volume=SOUND_VOLUME;
+        const p=a.play();
+        if(p&&typeof p.catch==="function") p.catch(()=>{});
+      }catch{}
+    }
 
-        el.className = 'fixed pointer-events-none z-[9999]';
-        el.style.width = `${w}px`;
-        el.style.height = `${h}px`;
-        el.style.borderRadius = isRect ? `${rand(2, 4)}px` : '9999px';
-        el.style.backgroundColor = CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)];
+    function checkAndPlayMilestoneSounds(oldTotal,newTotal){
+      const keys=Object.keys(MILESTONE_SOUNDS).map(Number).sort((a,b)=>a-b);
+      for(const k of keys){
+        if(oldTotal<k&&newTotal>=k) playSound(MILESTONE_SOUNDS[k]);
+      }
+    }
 
-        const startX = spawnCenterX + rand(-spawnSpread / 2, spawnSpread / 2);
-        const startY = window.innerHeight + rand(10, 40);
+    function launchConfetti(burstLevel=1){
+      const count=Math.round(90+60*Math.sqrt(burstLevel));
+      const spawnCenterX=window.innerWidth*0.5;
+      const spawnSpread=window.innerWidth*0.55;
 
-        el.style.left = `${startX}px`;
-        el.style.top  = `${startY}px`;
+      for(let i=0;i<count;i++){
+        const el=document.createElement('div');
+        const isRect=Math.random()<0.7;
+        const w=isRect?rand(6,10):rand(6,9);
+        const h=isRect?rand(10,16):w;
 
-        let dx = 0;
-        let dy = 0;
+        el.className='fixed pointer-events-none z-[9999]';
+        el.style.width=`${w}px`;
+        el.style.height=`${h}px`;
+        el.style.borderRadius=isRect?`${rand(2,4)}px`:'9999px';
+        el.style.backgroundColor=CONFETTI_COLORS[Math.floor(Math.random()*CONFETTI_COLORS.length)];
 
-        const angle = rand(-Math.PI * 0.88, -Math.PI * 0.12);
+        const startX=spawnCenterX+rand(-spawnSpread/2,spawnSpread/2);
+        const startY=window.innerHeight+rand(10,40);
 
-        const baseSpeed = rand(9, 18) + 1.7 * Math.sqrt(burstLevel);
-        let vx = Math.cos(angle) * baseSpeed * rand(0.8, 1.25);
-        let vy = Math.sin(angle) * baseSpeed * rand(0.9, 1.45);
+        el.style.left=`${startX}px`;
+        el.style.top=`${startY}px`;
 
-        const gravity = rand(0.16, 0.34);
-        const drag    = rand(0.985, 0.996);
-        const wind    = rand(-0.05, 0.05);
+        let dx=0,dy=0;
 
-        let rot = rand(0, 360);
-        let rotSpeed = rand(-16, 16);
-        let flip = rand(0, 360);
-        let flipSpeed = rand(-22, 22);
+        const angle=rand(-Math.PI*0.88,-Math.PI*0.12);
+        const baseSpeed=rand(9,18)+1.7*Math.sqrt(burstLevel);
+        let vx=Math.cos(angle)*baseSpeed*rand(0.8,1.25);
+        let vy=Math.sin(angle)*baseSpeed*rand(0.9,1.45);
 
-        // Levensduur
-        const life = rand(1400, 2400) + 140 * Math.sqrt(burstLevel);
-        const born = performance.now();
+        const gravity=rand(0.16,0.34);
+        const drag=rand(0.985,0.996);
+        const wind=rand(-0.05,0.05);
+
+        let rot=rand(0,360),rotSpeed=rand(-16,16);
+        let flip=rand(0,360),flipSpeed=rand(-22,22);
+
+        const life=rand(1400,2400)+140*Math.sqrt(burstLevel);
+        const born=performance.now();
 
         document.body.appendChild(el);
 
-        function tick(t) {
-          const age = t - born;
+        function tick(t){
+          const age=t-born;
 
-          vx = (vx + wind) * drag;
-          vy = (vy + gravity) * drag;
+          vx=(vx+wind)*drag;
+          vy=(vy+gravity)*drag;
 
-          dx += vx;
-          dy += vy;
+          dx+=vx;
+          dy+=vy;
 
-          rot += rotSpeed;
-          flip += flipSpeed;
+          rot+=rotSpeed;
+          flip+=flipSpeed;
 
-          const p = clamp(age / life, 0, 1);
-          const opacity = 1 - Math.pow(p, 2.1);
+          const p=clamp(age/life,0,1);
+          const opacity=1-Math.pow(p,2.1);
 
-          el.style.transform = `translate(${dx}px, ${dy}px) rotate(${rot}deg) rotateX(${flip}deg)`;
-          el.style.opacity = opacity.toFixed(3);
+          el.style.transform=`translate(${dx}px, ${dy}px) rotate(${rot}deg) rotateX(${flip}deg)`;
+          el.style.opacity=opacity.toFixed(3);
 
-          const currentY = startY + dy;
-          const currentX = startX + dx;
+          const currentY=startY+dy;
+          const currentX=startX+dx;
 
-          if (
-            age > life ||
-            currentY > window.innerHeight + 140 ||
-            currentX < -200 ||
-            currentX > window.innerWidth + 200
-          ) {
+          if(age>life||currentY>window.innerHeight+140||currentX<-200||currentX>window.innerWidth+200){
             el.remove();
             return;
           }
@@ -164,133 +220,115 @@
       }
     }
 
-    const fmt = new Intl.NumberFormat('nl-NL', {
-      style: 'currency',
-      currency: 'EUR',
-      maximumFractionDigits: 0
-    });
+    const fmt=new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR',maximumFractionDigits:0});
+    const totalEl=document.getElementById('total');
+    const helpEl=document.getElementById('help');
+    const deltas=document.getElementById('deltas');
 
-    const totalEl = document.getElementById('total');
-    const helpEl = document.getElementById('help');
-    const deltas = document.getElementById('deltas');
+    let total=Number(localStorage.getItem('total'))||0;
+    let history=JSON.parse(localStorage.getItem('history')||'[]');
 
-    let total = Number(localStorage.getItem('total')) || 0;
-    let history = JSON.parse(localStorage.getItem('history') || '[]');
-
-    function save() {
-      localStorage.setItem('total', total);
-      localStorage.setItem('history', JSON.stringify(history));
+    function save(){
+      localStorage.setItem('total',total);
+      localStorage.setItem('history',JSON.stringify(history));
     }
 
-    function render() {
-      totalEl.textContent = fmt.format(total);
+    function render(){
+      totalEl.textContent=fmt.format(total);
       save();
     }
 
-    function add(a) {
-      const oldTotal = total;
+    function add(a){
+      const oldTotal=total;
 
-      total += a;
+      total+=a;
       history.push(a);
       render();
-      showDelta(`+${fmt.format(a)}`, '#22c55e');
+      showDelta(`+${fmt.format(a)}`,'#22c55e');
 
-      const oldHundreds = Math.floor(oldTotal / 100);
-      const newHundreds = Math.floor(total / 100);
+      checkAndPlayMilestoneSounds(oldTotal,total);
 
-      if (newHundreds > oldHundreds) {
-        const crossed = newHundreds - oldHundreds;
+      const oldHundreds=Math.floor(oldTotal/100);
+      const newHundreds=Math.floor(total/100);
 
-        const milestoneLevel = Math.max(1, newHundreds);
-
-        const bursts = Math.min(3, crossed);
-
-        for (let i = 0; i < bursts; i++) {
-          setTimeout(() => launchConfetti(milestoneLevel), i * 180);
-        }
+      if(newHundreds>oldHundreds){
+        const crossed=newHundreds-oldHundreds;
+        const milestoneLevel=Math.max(1,newHundreds);
+        const bursts=Math.min(3,crossed);
+        for(let i=0;i<bursts;i++) setTimeout(()=>launchConfetti(milestoneLevel),i*180);
       }
     }
 
-    function undo() {
-      let last = history.pop();
-      if (last) {
-        total -= last;
+    function undo(){
+      let last=history.pop();
+      if(last){
+        total-=last;
         render();
-        showDelta(`–${fmt.format(last)}`, '#f59e0b');
+        showDelta(`–${fmt.format(last)}`,'#f59e0b');
       }
     }
 
-    function reset() {
-      total = 0;
-      history = [];
+    function reset(){
+      total=0;
+      history=[];
       render();
-      showDelta('Reset', '#fff');
+      showDelta('Reset','#fff');
     }
 
-    function showDelta(txt, color) {
-      const span = document.createElement('span');
-      span.textContent = txt;
-      span.style.color = color;
-      span.style.animation = 'fadeout 1.2s forwards';
+    function showDelta(txt,color){
+      const span=document.createElement('span');
+      span.textContent=txt;
+      span.style.color=color;
+      span.style.animation='fadeout 1.2s forwards';
       deltas.appendChild(span);
-      setTimeout(() => span.remove(), 1200);
+      setTimeout(()=>span.remove(),1200);
     }
 
-    window.addEventListener('keydown', e => {
-      let k = e.key.toLowerCase();
-      if (k === '1') add(1);
-      else if (k === '2') add(2);
-      else if (k === '4') add(4);
-      else if (k === 'u') undo();
-      else if (k === 'r') reset();
-      else if (k === 'h') helpEl.style.display = (helpEl.style.display === 'none' ? 'block' : 'none');
+    window.addEventListener('keydown',e=>{
+      let k=e.key.toLowerCase();
+      if(k==='1') add(1);
+      else if(k==='2') add(2);
+      else if(k==='4') add(4);
+      else if(k==='u') undo();
+      else if(k==='r') reset();
+      else if(k==='h') helpEl.style.display=(helpEl.style.display==='none'?'block':'none');
     });
 
     render();
 
-    // Snow
-    (function () {
-      const c = document.getElementById('snow'), ctx = c.getContext('2d');
-      let W, H, flakes;
+    (function(){
+      const c=document.getElementById('snow'),ctx=c.getContext('2d');
+      let W,H,flakes;
 
-      function resize() {
-        W = c.width = window.innerWidth;
-        H = c.height = window.innerHeight;
-        flakes = Array.from({ length: Math.floor(W * H / 9000) }, () => ({
-          x: Math.random() * W,
-          y: Math.random() * H,
-          r: Math.random() * 3 + 1,
-          d: Math.random() * 1 + 0.5
-        }));
+      function resize(){
+        W=c.width=window.innerWidth;
+        H=c.height=window.innerHeight;
+        flakes=Array.from({length:Math.floor(W*H/9000)},()=>({x:Math.random()*W,y:Math.random()*H,r:Math.random()*3+1,d:Math.random()*1+0.5}));
       }
 
-      function draw() {
-        ctx.clearRect(0, 0, W, H);
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      function draw(){
+        ctx.clearRect(0,0,W,H);
+        ctx.fillStyle='rgba(255,255,255,0.9)';
         ctx.beginPath();
-        for (const f of flakes) {
-          ctx.moveTo(f.x, f.y);
-          ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
-        }
+        for(const f of flakes){ctx.moveTo(f.x,f.y);ctx.arc(f.x,f.y,f.r,0,Math.PI*2)}
         ctx.fill();
         update();
         requestAnimationFrame(draw);
       }
 
-      function update() {
-        for (const f of flakes) {
-          f.y += f.d;
-          if (f.y > H) {
-            f.y = -4;
-            f.x = Math.random() * W;
-          }
+      function update(){
+        for(const f of flakes){
+          f.y+=f.d;
+          if(f.y>H){f.y=-4;f.x=Math.random()*W}
         }
       }
 
-      window.addEventListener('resize', resize);
+      window.addEventListener('resize',resize);
       resize();
       draw();
     })();
+
+    Object.values(MILESTONE_SOUNDS).forEach(u=>{resolveUrl(u).catch(()=>{})});
   </script>
 
 </body>
