@@ -8,7 +8,9 @@
   <style>
     body{margin:0;font-family:'Inter',sans-serif;background:url("https://media.deyvo.nl/media/kerst-achtergrond-ZcXHlHPo") no-repeat center center fixed;background-size:cover;overflow:hidden}
     @keyframes fadeout{0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-20px)}}
-    @keyframes twinkle{from{opacity:.2}to{opacity:1}}
+    @keyframes candyMove{0%{background-position:0 0}100%{background-position:48px 0}}
+    .candy-stripes{background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.55) 0 10px,rgba(255,255,255,0) 10px 20px);background-size:48px 48px;animation:candyMove 1.2s linear infinite}
+    .bar-glow{filter:drop-shadow(0 0 14px var(--glow, rgba(255,255,255,.25)))}
   </style>
 </head>
 <body class="relative text-center text-black">
@@ -22,7 +24,24 @@
   <div class="wrap relative z-20 flex flex-col items-center justify-center min-h-screen">
     <h1 class="text-[8rem] font-extrabold mt-20">4voorspier</h1>
     <p class="text-[3rem] mt-2">Opbrengst kerstmarkt</p>
-    <div id="total" class="text-red-600 text-[12rem] font-extrabold drop-shadow-[0_0_20px_rgba(255,0,0,0.4)]">€ 0</div>
+
+    <div class="mt-6 w-[min(760px,92vw)]">
+      <div class="mx-auto bg-black/45 text-white rounded-2xl px-5 py-4 backdrop-blur-sm border border-white/15">
+        <div class="flex items-center justify-between gap-4 text-base sm:text-lg font-semibold">
+          <div>Doel: <span id="goalText" class="tabular-nums">€ 0</span></div>
+          <div class="tabular-nums"><span id="progressText">0%</span></div>
+        </div>
+        <div class="mt-3 h-5 rounded-full bg-white/15 overflow-hidden border border-white/20">
+          <div id="progressFill" class="h-full w-0 rounded-full bar-glow transition-[width,background-color] duration-500 ease-out relative overflow-hidden">
+          </div>
+        </div>
+        <div class="mt-2 text-sm text-white/80 tabular-nums">
+          <span id="goalHint">Nog € 0 tot het volgende doel</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="total" class="mt-6 text-red-600 text-[12rem] font-extrabold drop-shadow-[0_0_20px_rgba(255,0,0,0.4)]">€ 0</div>
   </div>
 
   <div id="deltas" class="fixed top-[140px] left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5 z-40"></div>
@@ -47,94 +66,27 @@
   </div>
 
   <script>
-    const CONFETTI_COLORS=['#22c55e','#ef4444','#eab308','#3b82f6','#ec4899','#a855f7','#14b8a6'];
-    const MILESTONE_SOUNDS = {
-      100:  "/sounds/myinstants.mp3",
-      200:  "/sounds/myinstants.mp3",
-      300:  "/sounds/myinstants.mp3",
-      400:  "/sounds/myinstants.mp3",
-      500:  "/sounds/myinstants.mp3",
-      600:  "/sounds/myinstants.mp3",
-      700:  "/sounds/myinstants.mp3",
-      800:  "/sounds/myinstants.mp3",
-      900:  "/sounds/myinstants.mp3",
-      1000: "/sounds/myinstants.mp3"
-    };
+    const BAR_COLORS={low:"#c41616",mid:"#de1212",high:"#f70505"};
+    const BAR_GLOW={low:"rgba(239,68,68,.45)",mid:"rgba(245,158,11,.45)",high:"rgba(34,197,94,.45)"};
 
-    const SOUND_VOLUME=0.7;
+    const CONFETTI_COLORS=["#22c55e","#ef4444","#eab308","#3b82f6","#ec4899","#a855f7","#14b8a6"];
+    const MILESTONE_SOUNDS={100:"/sounds/myinstants.mp3",200:"/sounds/myinstants.mp3",300:"/sounds/myinstants.mp3",400:"/sounds/myinstants.mp3",500:"/sounds/myinstants.mp3",600:"/sounds/myinstants.mp3",700:"/sounds/myinstants.mp3",800:"/sounds/myinstants.mp3",900:"/sounds/myinstants.mp3",1000:"/sounds/myinstants.mp3"};
+    const SOUND_VOLUME=1.0;
+
+    const GOAL_STEP=200;
+    const DEFAULT_GOAL=200;
 
     function rand(min,max){return Math.random()*(max-min)+min}
     function clamp(v,min,max){return Math.max(min,Math.min(max,v))}
 
-    const resolvedSoundUrl=new Map();
     const audioPool=new Map();
-
-    function normalizeCandidates(url){
-      const base=url.split('?')[0].split('#')[0];
-      const hasExt=/\.(mp3|wav|ogg|m4a|aac)$/i.test(base);
-      if(hasExt) return [url];
-      return [url,url+".mp3",url+".wav",url+".ogg",url+".m4a"];
-    }
-
-    function probePlayable(url,timeoutMs=1200){
-      return new Promise((resolve,reject)=>{
-        const a=new Audio();
-        let done=false;
-        const cleanup=()=>{
-          a.oncanplaythrough=null;
-          a.onerror=null;
-          a.onloadeddata=null;
-          try{a.src="";a.load()}catch{}
-        };
-        const ok=()=>{
-          if(done) return;
-          done=true;
-          cleanup();
-          resolve(url);
-        };
-        const bad=()=>{
-          if(done) return;
-          done=true;
-          cleanup();
-          reject(new Error("not playable"));
-        };
-        const timer=setTimeout(()=>{if(!done){done=true;cleanup();reject(new Error("timeout"))}},timeoutMs);
-        const okWrap=()=>{clearTimeout(timer);ok()};
-        const badWrap=()=>{clearTimeout(timer);bad()};
-        a.preload="auto";
-        a.oncanplaythrough=okWrap;
-        a.onloadeddata=okWrap;
-        a.onerror=badWrap;
-        a.src=url;
-        try{a.load()}catch{clearTimeout(timer);bad()}
-      });
-    }
-
-    async function resolveUrl(url){
-      if(resolvedSoundUrl.has(url)) return resolvedSoundUrl.get(url);
-      const candidates=normalizeCandidates(url);
-      for(const c of candidates){
-        try{
-          const ok=await probePlayable(c);
-          resolvedSoundUrl.set(url,ok);
-          return ok;
-        }catch{}
-      }
-      resolvedSoundUrl.set(url,candidates[0]);
-      return candidates[0];
-    }
-
-    async function playSound(url){
+    function playSound(url){
       if(!url) return;
-      const finalUrl=await resolveUrl(url);
-      let a=audioPool.get(finalUrl);
+      let a=audioPool.get(url);
       if(!a){
-        a=new Audio(finalUrl);
+        a=new Audio(url);
         a.preload="auto";
-        a.crossOrigin="anonymous";
-        audioPool.set(finalUrl,a);
-      }else{
-        if(a.src!==finalUrl) a.src=finalUrl;
+        audioPool.set(url,a);
       }
       try{
         a.pause();
@@ -158,15 +110,15 @@
       const spawnSpread=window.innerWidth*0.55;
 
       for(let i=0;i<count;i++){
-        const el=document.createElement('div');
+        const el=document.createElement("div");
         const isRect=Math.random()<0.7;
         const w=isRect?rand(6,10):rand(6,9);
         const h=isRect?rand(10,16):w;
 
-        el.className='fixed pointer-events-none z-[9999]';
+        el.className="fixed pointer-events-none z-[9999]";
         el.style.width=`${w}px`;
         el.style.height=`${h}px`;
-        el.style.borderRadius=isRect?`${rand(2,4)}px`:'9999px';
+        el.style.borderRadius=isRect?`${rand(2,4)}px`:"9999px";
         el.style.backgroundColor=CONFETTI_COLORS[Math.floor(Math.random()*CONFETTI_COLORS.length)];
 
         const startX=spawnCenterX+rand(-spawnSpread/2,spawnSpread/2);
@@ -226,22 +178,68 @@
       }
     }
 
-    const fmt=new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR',maximumFractionDigits:0});
-    const totalEl=document.getElementById('total');
-    const helpEl=document.getElementById('help');
-    const deltas=document.getElementById('deltas');
+    const fmt=new Intl.NumberFormat("nl-NL",{style:"currency",currency:"EUR",maximumFractionDigits:0});
+    const totalEl=document.getElementById("total");
+    const helpEl=document.getElementById("help");
+    const deltas=document.getElementById("deltas");
 
-    let total=Number(localStorage.getItem('total'))||0;
-    let history=JSON.parse(localStorage.getItem('history')||'[]');
+    const goalTextEl=document.getElementById("goalText");
+    const progressFillEl=document.getElementById("progressFill");
+    const progressTextEl=document.getElementById("progressText");
+    const goalHintEl=document.getElementById("goalHint");
+
+    let total=Number(localStorage.getItem("total"))||0;
+    let history=JSON.parse(localStorage.getItem("history")||"[]");
+    let goal=Number(localStorage.getItem("goal"))||DEFAULT_GOAL;
 
     function save(){
-      localStorage.setItem('total',total);
-      localStorage.setItem('history',JSON.stringify(history));
+      localStorage.setItem("total",total);
+      localStorage.setItem("history",JSON.stringify(history));
+      localStorage.setItem("goal",goal);
+    }
+
+    function updateGoalIfNeeded(oldTotal,newTotal){
+      if(newTotal<goal) return 0;
+      const prevHits=Math.floor(oldTotal/GOAL_STEP);
+      const nextHits=Math.floor(newTotal/GOAL_STEP);
+      let moved=0;
+      while(newTotal>=goal){
+        goal+=GOAL_STEP;
+        moved++;
+      }
+      save();
+      return Math.max(0,nextHits-prevHits,moved);
     }
 
     function render(){
       totalEl.textContent=fmt.format(total);
+      goalTextEl.textContent=fmt.format(goal);
+
+      const pct=clamp(total/goal,0,1);
+      progressFillEl.style.width=(pct*100).toFixed(2)+"%";
+      progressTextEl.textContent=Math.round(pct*100)+"%";
+
+      let color,glow;
+      if(pct<0.34){color=BAR_COLORS.low;glow=BAR_GLOW.low}
+      else if(pct<0.67){color=BAR_COLORS.mid;glow=BAR_GLOW.mid}
+      else{color=BAR_COLORS.high;glow=BAR_GLOW.high}
+
+      progressFillEl.style.backgroundColor=color;
+      progressFillEl.style.setProperty("--glow",glow);
+
+      const remaining=Math.max(0,goal-total);
+      goalHintEl.textContent=`Nog ${fmt.format(remaining)} tot het volgende doel`;
+
       save();
+    }
+
+    function showDelta(txt,color){
+      const span=document.createElement("span");
+      span.textContent=txt;
+      span.style.color=color;
+      span.style.animation="fadeout 1.2s forwards";
+      deltas.appendChild(span);
+      setTimeout(()=>span.remove(),1200);
     }
 
     function add(a){
@@ -249,20 +247,26 @@
 
       total+=a;
       history.push(a);
-      render();
-      showDelta(`+${fmt.format(a)}`,'#22c55e');
 
       checkAndPlayMilestoneSounds(oldTotal,total);
 
-      const oldHundreds=Math.floor(oldTotal/100);
-      const newHundreds=Math.floor(total/100);
-
-      if(newHundreds>oldHundreds){
-        const crossed=newHundreds-oldHundreds;
-        const milestoneLevel=Math.max(1,newHundreds);
-        const bursts=Math.min(3,crossed);
-        for(let i=0;i<bursts;i++) setTimeout(()=>launchConfetti(milestoneLevel),i*180);
+      const movedGoals=updateGoalIfNeeded(oldTotal,total);
+      if(movedGoals>0){
+        const level=Math.max(1,Math.floor(total/100));
+        for(let i=0;i<Math.min(3,movedGoals);i++) setTimeout(()=>launchConfetti(level),i*180);
+      }else{
+        const oldHundreds=Math.floor(oldTotal/100);
+        const newHundreds=Math.floor(total/100);
+        if(newHundreds>oldHundreds){
+          const crossed=newHundreds-oldHundreds;
+          const milestoneLevel=Math.max(1,newHundreds);
+          const bursts=Math.min(3,crossed);
+          for(let i=0;i<bursts;i++) setTimeout(()=>launchConfetti(milestoneLevel),i*180);
+        }
       }
+
+      render();
+      showDelta(`+${fmt.format(a)}`,"#22c55e");
     }
 
     function undo(){
@@ -270,40 +274,32 @@
       if(last){
         total-=last;
         render();
-        showDelta(`–${fmt.format(last)}`,'#f59e0b');
+        showDelta(`–${fmt.format(last)}`,"#f59e0b");
       }
     }
 
     function reset(){
       total=0;
       history=[];
+      goal=DEFAULT_GOAL;
       render();
-      showDelta('Reset','#fff');
+      showDelta("Reset","#fff");
     }
 
-    function showDelta(txt,color){
-      const span=document.createElement('span');
-      span.textContent=txt;
-      span.style.color=color;
-      span.style.animation='fadeout 1.2s forwards';
-      deltas.appendChild(span);
-      setTimeout(()=>span.remove(),1200);
-    }
-
-    window.addEventListener('keydown',e=>{
+    window.addEventListener("keydown",e=>{
       let k=e.key.toLowerCase();
-      if(k==='1') add(1);
-      else if(k==='2') add(2);
-      else if(k==='4') add(4);
-      else if(k==='u') undo();
-      else if(k==='r') reset();
-      else if(k==='h') helpEl.style.display=(helpEl.style.display==='none'?'block':'none');
+      if(k==="1") add(1);
+      else if(k==="2") add(2);
+      else if(k==="4") add(4);
+      else if(k==="u") undo();
+      else if(k==="r") reset();
+      else if(k==="h") helpEl.style.display=(helpEl.style.display==="none"?"block":"none");
     });
 
     render();
 
     (function(){
-      const c=document.getElementById('snow'),ctx=c.getContext('2d');
+      const c=document.getElementById("snow"),ctx=c.getContext("2d");
       let W,H,flakes;
 
       function resize(){
@@ -314,7 +310,7 @@
 
       function draw(){
         ctx.clearRect(0,0,W,H);
-        ctx.fillStyle='rgba(255,255,255,0.9)';
+        ctx.fillStyle="rgba(255,255,255,0.9)";
         ctx.beginPath();
         for(const f of flakes){ctx.moveTo(f.x,f.y);ctx.arc(f.x,f.y,f.r,0,Math.PI*2)}
         ctx.fill();
@@ -329,12 +325,10 @@
         }
       }
 
-      window.addEventListener('resize',resize);
+      window.addEventListener("resize",resize);
       resize();
       draw();
     })();
-
-    Object.values(MILESTONE_SOUNDS).forEach(u=>{resolveUrl(u).catch(()=>{})});
   </script>
 
 </body>
